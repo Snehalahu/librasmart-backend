@@ -1,16 +1,28 @@
 package com.librasmart.service;
 
-import com.librasmart.dto.BorrowDto;
-import com.librasmart.entity.*;
-import com.librasmart.repository.*;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.stream.Collectors;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.librasmart.dto.BorrowDto;
+import com.librasmart.entity.Book;
+import com.librasmart.entity.BorrowRecord;
+import com.librasmart.entity.Fine;
+import com.librasmart.entity.Notification;
+import com.librasmart.entity.User;
+import com.librasmart.repository.BookRepository;
+import com.librasmart.repository.BorrowRecordRepository;
+import com.librasmart.repository.FineRepository;
+import com.librasmart.repository.GamificationRepository;
+import com.librasmart.repository.NotificationRepository;
+import com.librasmart.repository.UserRepository;
 
 @Service
 public class BorrowService {
@@ -33,6 +45,10 @@ public class BorrowService {
     @Autowired
     private NotificationRepository notificationRepository;
 
+    @Autowired
+    @Lazy
+    private GamificationService gamificationService;
+
     // Borrow a book
     @Transactional
     public BorrowDto borrowBook(Long userId, Long bookId) {
@@ -45,7 +61,8 @@ public class BorrowService {
 
         // Check if book is available
         if (book.getAvailableCopies() <= 0) {
-            throw new RuntimeException("No copies available for this book");
+            throw new RuntimeException(
+                    "No copies available for this book");
         }
 
         // Check if user already borrowed this book
@@ -70,13 +87,13 @@ public class BorrowService {
         book.setAvailableCopies(book.getAvailableCopies() - 1);
         bookRepository.save(book);
 
-        // Add points to gamification
+        // Add points for borrowing
         addPoints(user, 10);
 
         // Send notification
         sendNotification(user, "Book Borrowed",
-                "You borrowed '" + book.getTitle() + "'. Due date: "
-                        + record.getDueDate(),
+                "You borrowed '" + book.getTitle()
+                        + "'. Due date: " + record.getDueDate(),
                 Notification.Type.DUE_DATE);
 
         return mapToDto(saved);
@@ -86,7 +103,8 @@ public class BorrowService {
     @Transactional
     public BorrowDto returnBook(Long borrowRecordId) {
 
-        BorrowRecord record = borrowRecordRepository.findById(borrowRecordId)
+        BorrowRecord record = borrowRecordRepository
+                .findById(borrowRecordId)
                 .orElseThrow(() -> new RuntimeException(
                         "Borrow record not found"));
 
@@ -126,7 +144,8 @@ public class BorrowService {
 
             // Send fine notification
             sendNotification(record.getUser(), "Fine Applied",
-                    "You have a fine of ₹" + fine + " for late return of '"
+                    "You have a fine of Rs." + fine
+                            + " for late return of '"
                             + book.getTitle() + "'",
                     Notification.Type.FINE);
         } else {
@@ -136,6 +155,9 @@ public class BorrowService {
 
         // Update gamification books read
         updateBooksRead(record.getUser());
+
+        // Check and award badges
+        gamificationService.checkAndAwardBadges(record.getUser());
 
         BorrowDto dto = mapToDto(record);
         dto.setTotalFine(fine);
@@ -163,7 +185,7 @@ public class BorrowService {
                 .collect(Collectors.toList());
     }
 
-    // Get all borrow records (Admin)
+    // Get all borrow records — Admin
     public List<BorrowDto> getAllBorrowRecords() {
         return borrowRecordRepository.findAll()
                 .stream()
@@ -171,7 +193,7 @@ public class BorrowService {
                 .collect(Collectors.toList());
     }
 
-    // Get overdue books (Admin)
+    // Get overdue books — Admin
     public List<BorrowDto> getOverdueBooks() {
         return borrowRecordRepository
                 .findByDueDateBeforeAndStatus(
@@ -184,7 +206,7 @@ public class BorrowService {
     // Helper — add points
     private void addPoints(User user, int points) {
         gamificationRepository.findByUser(user).ifPresent(g -> {
-            g.setTotalPoints(g.getTotalPoints() + points);
+            g.setTotalPoints(Math.max(0, g.getTotalPoints() + points));
             gamificationRepository.save(g);
         });
     }
